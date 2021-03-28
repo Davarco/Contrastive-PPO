@@ -8,6 +8,8 @@ import os
 def collect_observations(num_obs, env_name, max_rollout_length=200, procgen=True, render=False, data_dir='data'):
     if procgen:
         env = gym.make('procgen:procgen-{}'.format(env_name), distribution_mode='easy')
+        print(env.observation_space)
+        print(env.action_space)
     else:
         env = gym.make(env_name)
     i = 0
