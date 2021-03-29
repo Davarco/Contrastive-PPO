@@ -36,19 +36,19 @@ class DQN():
         self.Q.train()
 
         self.obs = self.env.reset()
-        self.obs = self.obs.transpose(2, 0, 1)
+        # self.obs = self.obs.transpose(2, 0, 1)
 
     def evaluate(self, num_episodes):
         rewards = []
         for _ in range(num_episodes):
             episode_reward = []
             obs = self.env.reset()
-            obs = obs.transpose(2, 0, 1)
+            # obs = obs.transpose(2, 0, 1)
             for _ in range(self.max_rollout_length):
-                self.env.render()
+                # self.env.render()
                 action = self.get_action(obs, 0.05)
                 obs, reward, done, _ = self.env.step(action)
-                obs = obs.transpose(2, 0, 1)
+                # obs = obs.transpose(2, 0, 1)
                 episode_reward.append(reward)
                 if done:
                     break
@@ -76,7 +76,7 @@ class DQN():
                 # TODO Get action from target policy
                 action = self.get_action(self.obs, eps)
                 next_obs, reward, done, _ = self.env.step(action)
-                next_obs = next_obs.transpose(2, 0, 1)
+                # next_obs = next_obs.transpose(2, 0, 1)
                 transition = {
                     'obs': self.obs,
                     'action': action,
@@ -89,14 +89,14 @@ class DQN():
                 i += 1
                 if done:
                     self.obs = self.env.reset()
-                    self.obs = self.obs.transpose(2, 0, 1)
+                    # self.obs = self.obs.transpose(2, 0, 1)
                 if i == num_transitions:
                     break
 
     def collect_single_transition(self, eps):
         action = self.get_action(self.obs, eps)
         next_obs, reward, done, _ = self.env.step(action)
-        next_obs = next_obs.transpose(2, 0, 1)
+        # next_obs = next_obs.transpose(2, 0, 1)
         transition = {
             'obs': self.obs,
             'action': action,
@@ -107,7 +107,7 @@ class DQN():
         self.obs = next_obs
         if done:
             self.obs = self.env.reset()
-            self.obs = self.obs.transpose(2, 0, 1)
+            # self.obs = self.obs.transpose(2, 0, 1)
 
     def get_action(self, obs, eps):
         if eps < np.random.rand():
@@ -121,26 +121,35 @@ class DQN():
 
     def create_model(self):
         model = nn.Sequential(
-                nn.Conv2d(3, 16, kernel_size=3, padding=1),
+                nn.Linear(4, 32),
                 nn.ReLU(),
-                nn.MaxPool2d(2, 2),
-                nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),
+                nn.Linear(32, 32),
                 nn.ReLU(),
-                nn.MaxPool2d(2, 2),
-                nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
-                nn.ReLU(),
-                nn.MaxPool2d(2, 2),
-                nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1),
-                nn.ReLU(),
-                nn.MaxPool2d(2, 2),
-                nn.Flatten(),
-                nn.Linear(1024, 512),
-                nn.ReLU(),
-                nn.Linear(512, 15))
+                nn.Linear(32, 32),
+                nn.Linear(32, 2))
+        # model = nn.Sequential(
+        #         nn.Conv2d(3, 16, kernel_size=3, padding=1),
+        #         nn.ReLU(),
+        #         nn.MaxPool2d(2, 2),
+        #         nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),
+        #         nn.ReLU(),
+        #         nn.MaxPool2d(2, 2),
+        #         nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+        #         nn.ReLU(),
+        #         nn.MaxPool2d(2, 2),
+        #         nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1),
+        #         nn.ReLU(),
+        #         nn.MaxPool2d(2, 2),
+        #         nn.Flatten(),
+        #         nn.Linear(1024, 512),
+        #         nn.ReLU(),
+        #         nn.Linear(512, 15))
         return model
 
     def train(self):
         print('Beginning training.')
+        print(self.env.observation_space)
+        print(self.env.action_space)
         self.collect_transitions(self.initial_buffer_size, eps=1)
         print('Finished collecting initial buffer.')
 
@@ -168,6 +177,8 @@ class DQN():
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
+
+            # TODO Gradient clipping, Huber loss
 
             if t % 1000 == 0:
                 avg_score = self.evaluate(50)
@@ -212,7 +223,7 @@ class ReplayBuffer():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--env_name', default='fruitbot-v0', type=str)
-    parser.add_argument('--procgen', default=True, type=bool)
+    parser.add_argument('--procgen', default=1, type=int)
     parser.add_argument('--ob_dim', nargs='+', default=(3, 64, 64), type=int)
     parser.add_argument('--ac_dim', default=1, type=int)
     parser.add_argument('--max_rollout_length', default=500, type=int)
@@ -231,7 +242,10 @@ def main():
     args.ob_dim = tuple(args.ob_dim)
     params = vars(args)
 
-    env = gym.make(params['env_name'], distribution_mode='easy')
+    if args.procgen:
+        env = gym.make(params['env_name'], distribution_mode='easy')
+    else:
+        env = gym.make(params['env_name'])
     dqn = DQN(env, params)
     dqn.train()
 

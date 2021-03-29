@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import torchvision
 import torchvision.transforms as transforms
+from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 import cv2
 import argparse
@@ -13,6 +14,7 @@ from PIL import Image
 
 
 device = 'cuda'
+writer = SummaryWriter(log_dir='logs')
 
 
 class ProcgenDataset(Dataset):
@@ -75,6 +77,8 @@ def create_model():
             nn.Flatten(),
             # 16384
             nn.Linear(4096, 1024),
+            # nn.ReLU(),
+            # nn.Linear(16384, 1024),
             nn.ReLU(),
             nn.Linear(1024, 512),
             nn.ReLU(),
@@ -101,9 +105,11 @@ def train(model, optimizer, train_dl, validation_dl, epochs=1):
             loss.backward()
             optimizer.step()
 
-            if it % 100 == 0:
+            if it % 5 == 0:
                 acc = evaluate(validation_dl, model)
                 print('Iteration {}, loss = {}, acc = {}'.format(t, loss.item(), acc))
+                writer.add_scalar('Training Loss', loss.item(), it)
+                writer.add_scalar('Validation Accuracy', acc, it)
             it += 1
         val_accs.append(evaluate(validation_dl, model))
     return val_accs
@@ -152,8 +158,8 @@ def main():
     model = create_model()
     model = model.to(device)
 
-    optimizer = optim.Adam(model.parameters(), lr=0.0001)
-    validation_accs = train(model, optimizer, train_dl, validation_dl, epochs=5)
+    optimizer = optim.Adam(model.parameters(), lr=0.0002)
+    validation_accs = train(model, optimizer, train_dl, validation_dl, epochs=10)
     
     test_acc = evaluate(test_dl, model)
     print(test_acc)
