@@ -35,6 +35,8 @@ class DQN():
         self.target_Q.eval()
         self.Q.train()
 
+        self.target_Q.load_state_dict(self.Q.state_dict())
+
         self.obs = self.env.reset()
         # self.obs = self.obs.transpose(2, 0, 1)
 
@@ -81,7 +83,7 @@ class DQN():
                     'obs': self.obs,
                     'action': action,
                     'next_obs': next_obs,
-                    'reward': reward
+                    'reward': reward if not done else -1
                 }
                 self.buffer.add_transition(transition)
                 self.obs = next_obs
@@ -101,7 +103,7 @@ class DQN():
             'obs': self.obs,
             'action': action,
             'next_obs': next_obs,
-            'reward': reward
+            'reward': reward if not done else -1
         }
         self.buffer.add_transition(transition)
         self.obs = next_obs
@@ -161,14 +163,10 @@ class DQN():
             batch = self.buffer.sample_batch(self.batch_size)
             obs, actions, next_obs, rewards = batch['obs'], batch['action'], batch['next_obs'], batch['reward']
 
-            obs = torch.from_numpy(obs)
-            obs = obs.to(device=device, dtype=torch.float)
-            actions = torch.from_numpy(actions)
-            actions = actions.to(device=device, dtype=torch.long)
-            next_obs = torch.from_numpy(next_obs)
-            next_obs = next_obs.to(device=device, dtype=torch.float)
-            rewards = torch.from_numpy(rewards)
-            rewards = rewards.to(device=device, dtype=torch.float)
+            obs = torch.from_numpy(obs).to(device=device, dtype=torch.float)
+            actions = torch.from_numpy(actions).to(device=device, dtype=torch.long)
+            next_obs = torch.from_numpy(next_obs).to(device=device, dtype=torch.float)
+            rewards = torch.from_numpy(rewards).to(device=device, dtype=torch.float)
 
             scores = self.Q(obs).gather(1, actions.view(-1, 1)).squeeze()
             targets = self.gamma*self.target_Q(next_obs).max(dim=1)[0] + rewards
@@ -209,8 +207,8 @@ class ReplayBuffer():
     def add_transition(self, transition):
         for key in self.buffer:
             self.buffer[key][self.index] = transition[key]
-            self.index = (self.index + 1) % self.max_buffer_size
-            self.buffer_size = min(self.buffer_size + 1, self.max_buffer_size)
+        self.index = (self.index + 1) % self.max_buffer_size
+        self.buffer_size = min(self.buffer_size + 1, self.max_buffer_size)
         
     def sample_batch(self, batch_size):
         b = {}
@@ -223,9 +221,7 @@ class ReplayBuffer():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--env_name', default='fruitbot-v0', type=str)
-    parser.add_argument('--procgen', default=1, type=int)
-    parser.add_argument('--ob_dim', nargs='+', default=(3, 64, 64), type=int)
-    parser.add_argument('--ac_dim', default=1, type=int)
+    parser.add_argument('--procgen', action='store_true')
     parser.add_argument('--max_rollout_length', default=500, type=int)
     parser.add_argument('--max_buffer_size', default=100000, type=int)
     parser.add_argument('--initial_buffer_size', default=10000, type=int)
@@ -236,16 +232,19 @@ def main():
     parser.add_argument('--exploration_steps', default=75000, type=int)
     parser.add_argument('--training_steps', default=500000, type=int)
     parser.add_argument('--update_freq', default=10000, type=int)
-
     args = parser.parse_args()
-    args.env_name = 'procgen:procgen-{}'.format(args.env_name) if args.procgen else args.env_name
-    args.ob_dim = tuple(args.ob_dim)
+
     params = vars(args)
 
     if args.procgen:
+        params['env_name'] = 'procgen:procgen-{}'.format(params['env_name'])
         env = gym.make(params['env_name'], distribution_mode='easy')
     else:
         env = gym.make(params['env_name'])
+    params['ob_dim'] = env.observation_space.shape
+    # 1params['ac_dim'] = env.action_space.n
+    params['ac_dim'] = 1
+
     dqn = DQN(env, params)
     dqn.train()
 
