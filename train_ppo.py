@@ -12,51 +12,62 @@ device = 'cuda'
 
 
 class PPO():
-    def __init__(self, env, eval_env):
+    def __init__(
+        self, 
+        env, 
+        eval_env,
+        gamma,
+        lr,
+        n_timesteps,
+        n_epochs,
+        batch_size,
+        buffer_size
+    ):
         self.env = env
         self.eval_env = eval_env
+        self.gamma = gamma
+        self.lr = lr
+        self.n_timesteps = n_timesteps
+        self.n_epochs = n_epochs
+        self.batch_size = batch_size
+        self.buffer_size = buffer_size
+
+        self.ob_dim = env.observation_space.shape
+        self.ac_dim = env.action_space.n
         self.policy = ActorCriticPolicy()
-        self.rollout_buffer = RolloutBuffer(2048, (4,))
+        self.rollout_buffer = RolloutBuffer(buffer_size, self.ob_dim)
 
         self._obs = env.reset()
 
     def train(self):
-        optimizer = optim.Adam(self.policy.parameters(), lr=0.01)
+        optimizer = optim.Adam(self.policy.parameters(), lr=self.lr)
 
-        # K_epochs
-        for _ in range(1):
-            # batch_size
-            for batch in self.rollout_buffer.get_dataloader(2048):
-                obs, actions, next_obs, rewards, dones = batch
+        for _ in range(self.n_epochs):
+            for batch in self.rollout_buffer.get_dataloader(self.batch_size):
+                obs, _, old_logprobs, _, _, _, _, returns, advantages = batch
 
-                values = self.policy.get_values(obs)
-                next_values = self.policy.get_values(next_obs)
-                # gamma
-                # advantages = rewards + 0.99*next_values*(1-dones) - values
-
-                # est_values = self.estimate_q_values(rewards.cpu().numpy(), dones)
-                # advantages = est_values - values
-                advantages = self.estimate_q_values(rewards.cpu().numpy(), dones)
                 advantages = (advantages-advantages.mean())/(advantages.std()+1e-6)
 
-                actor_loss = -torch.mean(self.policy.forward(obs).log_prob(actions)*advantages)
-                # critic_loss = F.mse_loss(values, rewards + 0.99*next_values*(1-dones))
+                _, logprobs = self.policy.get_action(obs)
+                values = self.policy.get_values(obs)
 
-                # critic_loss = F.mse_loss(values, est_values)
+                ratio = torch.exp(logprobs - old_logprobs)
+                actor_loss = -torch.mean(torch.min(ratio*advantages, torch.clamp(ratio, 0.8, 1.2)*advantages))
 
-                # loss = actor_loss + critic_loss
-                loss = actor_loss
+                critic_loss = 0.5*F.mse_loss(returns, values)
 
-                print(torch.sum(rewards)/(torch.sum(dones)+1e-6))
+                loss = actor_loss + critic_loss
 
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
     def learn(self):
-        for i in range(1000):
-            self.collect_rollouts(self.env, self.policy, self.rollout_buffer)
+        for i in range(self.n_timesteps):
+            avg_reward = self.collect_rollouts(self.env, self.policy, self.rollout_buffer)
             self.train()
+
+            print('Iteration {}: avg reward={}'.format(i, avg_reward))
 
             if i % 10 == 0:
                 avg_reward = self.evaluate_policy(self.eval_env, self.policy)
@@ -69,7 +80,7 @@ class PPO():
             total_reward = 0
             while True:
                 env.render()
-                action = policy.get_action(torch.from_numpy(obs).to(device, torch.float32)).cpu().numpy()
+                action, _ = policy.get_action_np(obs)
                 obs, reward, done, info = env.step(action)
                 total_reward += reward
                 if done:
@@ -79,31 +90,33 @@ class PPO():
         return np.mean(rewards)
             
     def collect_rollouts(self, env, policy, rollout_buffer):
-        self.rollout_buffer.reset()
-        # buffer_size
-        for i in range(2048):
-            action = policy.get_action(torch.from_numpy(self._obs).to(device, torch.float32)).cpu().numpy()
+        rollout_buffer.reset()
+        for i in range(self.buffer_size):
+            action, logprob = policy.get_action_np(self._obs)
+            value = policy.get_values(self._obs)
             next_obs, reward, done, info = env.step(action)
-            rollout_buffer.add_transition(self._obs, action, next_obs, reward, done)
+            rollout_buffer.add_transition(self._obs, action, logprob, value, next_obs, reward, done)
             if done:
                 self._obs = env.reset()
             else:
                 self._obs = next_obs
+        rollout_buffer.compute_advantages(self.gamma)
+        return rollout_buffer.get_average_reward()
     
-    def estimate_q_values(self, rewards, dones):
-        T = len(rewards)
-        Q = []
+    # def estimate_q_values(self, rewards, dones):
+    #     T = len(rewards)
+    #     Q = []
 
-        cumsum = 0
-        for t in reversed(range(T)):
-            if dones[t]:
-                cumsum = rewards[t]
-            else:
-                cumsum = rewards[t] + 0.99*cumsum
-            Q.append(cumsum)
-        
-        Q = np.array(list(reversed(Q)), dtype=np.float32)
-        return torch.from_numpy(Q).to(device, torch.float32)
+    #     cumsum = 0
+    #     for t in reversed(range(T)):
+    #         if dones[t]:
+    #             cumsum = rewards[t]
+    #         else:
+    #             cumsum = rewards[t] + self.gamma*cumsum
+    #         Q.append(cumsum)
+    #     
+    #     Q = np.array(list(reversed(Q)), dtype=np.float32)
+    #     return torch.from_numpy(Q).to(device, torch.float32)
 
 
 class ActorCriticPolicy(nn.Module):
@@ -131,12 +144,28 @@ class ActorCriticPolicy(nn.Module):
         return distributions.Categorical(logits=logits)
 
     def get_action(self, obs):
-        dis = self.forward(obs)
-        return dis.sample()
+        if isinstance(obs, np.ndarray):
+            obs = torch.from_numpy(obs).to(device, torch.float32)
+            dis = self.forward(obs)
+            action = dis.sample()
+            return action, dis.log_prob(action)
+        else:
+            dis = self.forward(obs)
+            action = dis.sample()
+            return action, dis.log_prob(action)
+
+    def get_action_np(self, obs):
+        action, logprob = self.get_action(obs)
+        return action.cpu().numpy(), logprob.detach().cpu().numpy()
 
     def get_values(self, obs):
-        values = self.critic(obs)
-        return values.squeeze()
+        if isinstance(obs, np.ndarray):
+            obs = torch.from_numpy(obs).to(device, torch.float32)
+            values = self.critic(obs)
+            return values.squeeze()
+        else:
+            values = self.critic(obs)
+            return values.squeeze()
 
 
 class RolloutBuffer():
@@ -148,13 +177,17 @@ class RolloutBuffer():
         self.index = 0
         self.obs = np.zeros((self.size, *self.ob_dim), dtype=np.float32)
         self.actions = np.zeros(self.size)
+        self.logprobs = np.zeros(self.size, dtype=np.float32)
+        self.values = np.zeros(self.size, dtype=np.float32)
         self.next_obs = np.zeros((self.size, *self.ob_dim), dtype=np.float32)
         self.rewards = np.zeros(self.size, dtype=np.float32)
         self.dones = np.zeros(self.size, dtype=np.float32)
 
-    def add_transition(self, obs, action, next_obs, reward, done):
+    def add_transition(self, obs, action, logprob, value, next_obs, reward, done):
         self.obs[self.index] = obs
         self.actions[self.index] = action
+        self.logprobs[self.index] = logprob
+        self.values[self.index] = value
         self.next_obs[self.index] = next_obs
         self.rewards[self.index] = reward
         self.dones[self.index] = done
@@ -168,14 +201,50 @@ class RolloutBuffer():
         while j < self.size:
             s = np.index_exp[j:j+batch_size]
             j += batch_size
-            b = (self.obs[i][s], self.actions[i][s], self.next_obs[i][s], self.rewards[i][s], self.dones[i][s])
+            b = (
+                self.obs[i][s], 
+                self.actions[i][s], 
+                self.logprobs[i][s], 
+                self.values[i][s], 
+                self.next_obs[i][s], 
+                self.rewards[i][s], 
+                self.dones[i][s],
+                self.returns[i][s],
+                self.advantages[i][s]
+            )
             yield tuple(map(lambda A: torch.from_numpy(A).to(device), b))
+
+    def get_average_reward(self):
+        i = np.where(self.dones == 1)[0][-1]
+        return np.sum(self.rewards[:i])/np.sum(self.dones)
+
+    def compute_advantages(self, gamma):
+        T = len(self.rewards)
+        Q = np.zeros(T, np.float32)
+
+        cumsum = 0
+        for t in reversed(range(T)):
+            if self.dones[t]:
+                cumsum = self.rewards[t]
+            else:
+                cumsum = self.rewards[t] + gamma*cumsum
+            Q[t] = cumsum
+        
+        self.returns = Q[::-1]
+        self.advantages = self.returns - self.values
+        # return torch.from_numpy(Q).to(device, torch.float32)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--env_name', default='CartPole-v0', type=str)
     parser.add_argument('--procgen', action='store_true')
+    parser.add_argument('--gamma', default=0.99, type=float)
+    parser.add_argument('--lr', default=0.001, type=float)
+    parser.add_argument('--n_timesteps', default=1000000, type=int)
+    parser.add_argument('--n_epochs', default=5, type=int)
+    parser.add_argument('--batch_size', default=512, type=int)
+    parser.add_argument('--buffer_size', default=2048, type=int)
     args = parser.parse_args()
 
     if args.procgen:
@@ -185,11 +254,17 @@ def main():
     else:
         env = gym.make(args.env_name)
         eval_env = gym.make(args.env_name)
-    args.ob_dim = env.observation_space.shape
-    args.ac_dim = env.action_space.n
-    print(env.observation_space, env.action_space)
 
-    ppo = PPO(env, eval_env)
+    ppo = PPO(
+        env=env,
+        eval_env=eval_env,
+        gamma=args.gamma,
+        lr=args.lr,
+        n_timesteps=args.n_timesteps,
+        n_epochs=args.n_epochs,
+        batch_size=args.batch_size,
+        buffer_size=args.buffer_size
+    )
     ppo.learn()
 
 
