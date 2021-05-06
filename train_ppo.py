@@ -21,7 +21,10 @@ class PPO():
         n_timesteps,
         n_epochs,
         batch_size,
-        buffer_size
+        buffer_size,
+        clip_coef,
+        critic_coef,
+        entropy_coef
     ):
         self.env = env
         self.eval_env = eval_env
@@ -31,6 +34,9 @@ class PPO():
         self.n_epochs = n_epochs
         self.batch_size = batch_size
         self.buffer_size = buffer_size
+        self.clip_coef = clip_coef
+        self.critic_coef = critic_coef
+        self.entropy_coef = entropy_coef
 
         self.ob_dim = env.observation_space.shape
         self.ac_dim = env.action_space.n
@@ -44,25 +50,19 @@ class PPO():
 
         for _ in range(self.n_epochs):
             for batch in self.rollout_buffer.get_dataloader(self.batch_size):
-                obs, actions, old_logprobs, values, next_obs, rewards, dones, returns, advantages = batch
+                obs, actions, old_logprobs, _, _, rewards, dones, returns, advantages = batch
 
-                _, logprobs = self.policy.get_action(obs)
+                logprobs, entropy = self.policy.evaluate_actions(obs, actions)
                 values = self.policy.get_values(obs)
 
-                # advantages = returns-values
-                # advantages = returns-values
-                # advantages = returns
-                # advantages = self.estimate_q_values(rewards.cpu().numpy(), dones.cpu().numpy())
-                # advantages = returns
+                ratio = torch.exp(logprobs - old_logprobs)
+                actor_loss_1 = ratio*advantages
+                actor_loss_2 = torch.clamp(ratio, 1-self.clip_coef, 1+self.clip_coef)*advantages
+                actor_loss = -torch.mean(torch.min(actor_loss_1, actor_loss_2))
+                critic_loss = self.critic_coef*F.mse_loss(values, returns)
+                entropy_loss = -self.entropy_coef*torch.mean(entropy)
 
-                # ratio = torch.exp(logprobs - old_logprobs)
-                # actor_loss = -torch.mean(torch.min(ratio*advantages, torch.clamp(ratio, 0.8, 1.2)*advantages))
-                actor_loss = -torch.mean(self.policy.forward(obs).log_prob(actions)*advantages)
-
-                critic_loss = 0.5*F.mse_loss(values, returns)
-
-                loss = actor_loss + critic_loss
-                # loss = actor_loss
+                loss = actor_loss + critic_loss + entropy_loss
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -86,7 +86,7 @@ class PPO():
             total_reward = 0
             while True:
                 env.render()
-                action, _ = policy.get_action_np(obs)
+                action, _ = policy.get_actions_np(obs)
                 obs, reward, done, info = env.step(action)
                 total_reward += reward
                 if done:
@@ -98,7 +98,7 @@ class PPO():
     def collect_rollouts(self, env, policy, rollout_buffer):
         rollout_buffer.reset()
         for i in range(self.buffer_size):
-            action, logprob = policy.get_action_np(self._obs)
+            action, logprob = policy.get_actions_np(self._obs)
             value = policy.get_values(self._obs)
             next_obs, reward, done, info = env.step(action)
             rollout_buffer.add_transition(self._obs, action, logprob, value, next_obs, reward, done)
@@ -109,21 +109,6 @@ class PPO():
         rollout_buffer.compute_advantages(self.gamma)
         return rollout_buffer.get_average_reward()
     
-    def estimate_q_values(self, rewards, dones):
-        T = len(rewards)
-        Q = []
-
-        cumsum = 0
-        for t in reversed(range(T)):
-            if dones[t]:
-                cumsum = rewards[t]
-            else:
-                cumsum = rewards[t] + self.gamma*cumsum
-            Q.append(cumsum)
-        
-        Q = np.array(list(reversed(Q)), dtype=np.float32)
-        return torch.from_numpy(Q).to(device, torch.float32)
-
 
 class ActorCriticPolicy(nn.Module):
     def __init__(self):
@@ -149,7 +134,7 @@ class ActorCriticPolicy(nn.Module):
         logits = self.actor(obs)
         return distributions.Categorical(logits=logits)
 
-    def get_action(self, obs):
+    def get_actions(self, obs):
         if isinstance(obs, np.ndarray):
             obs = torch.from_numpy(obs).to(device, torch.float32)
             dis = self.forward(obs)
@@ -160,9 +145,19 @@ class ActorCriticPolicy(nn.Module):
             action = dis.sample()
             return action, dis.log_prob(action)
 
-    def get_action_np(self, obs):
-        action, logprob = self.get_action(obs)
+    def get_actions_np(self, obs):
+        action, logprob = self.get_actions(obs)
         return action.cpu().numpy(), logprob.detach().cpu().numpy()
+
+    def evaluate_actions(self, obs, actions):
+        if isinstance(obs, np.ndarray):
+            obs = torch.from_numpy(obs).to(device, torch.float32)
+            dis = self.forward(obs)
+            return dis.log_prob(actions), dis.entropy()
+        else:
+            dis = self.forward(obs)
+            return dis.log_prob(actions), dis.entropy()
+
 
     def get_values(self, obs):
         if isinstance(obs, np.ndarray):
@@ -245,11 +240,14 @@ def main():
     parser.add_argument('--env_name', default='CartPole-v0', type=str)
     parser.add_argument('--procgen', action='store_true')
     parser.add_argument('--gamma', default=0.99, type=float)
-    parser.add_argument('--lr', default=0.001, type=float)
+    parser.add_argument('--lr', default=0.0003, type=float)
     parser.add_argument('--n_timesteps', default=1000000, type=int)
-    parser.add_argument('--n_epochs', default=5, type=int)
+    parser.add_argument('--n_epochs', default=8, type=int)
     parser.add_argument('--batch_size', default=512, type=int)
     parser.add_argument('--buffer_size', default=2048, type=int)
+    parser.add_argument('--clip_coef', default=0.2, type=float)
+    parser.add_argument('--critic_coef', default=0.5, type=float)
+    parser.add_argument('--entropy_coef', default=0.00, type=float)
     args = parser.parse_args()
 
     if args.procgen:
@@ -268,7 +266,10 @@ def main():
         n_timesteps=args.n_timesteps,
         n_epochs=args.n_epochs,
         batch_size=args.batch_size,
-        buffer_size=args.buffer_size
+        buffer_size=args.buffer_size,
+        clip_coef=args.clip_coef,
+        critic_coef=args.critic_coef,
+        entropy_coef=args.entropy_coef
     )
     ppo.learn()
 
