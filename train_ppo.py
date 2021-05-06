@@ -53,16 +53,16 @@ class PPO():
                 # advantages = returns-values
                 # advantages = returns
                 # advantages = self.estimate_q_values(rewards.cpu().numpy(), dones.cpu().numpy())
-                advantages = (advantages-advantages.mean())/(advantages.std()+1e-6)
+                # advantages = returns
 
                 # ratio = torch.exp(logprobs - old_logprobs)
                 # actor_loss = -torch.mean(torch.min(ratio*advantages, torch.clamp(ratio, 0.8, 1.2)*advantages))
                 actor_loss = -torch.mean(self.policy.forward(obs).log_prob(actions)*advantages)
 
-                # critic_loss = 0.5*F.mse_loss(values, returns)
+                critic_loss = 0.5*F.mse_loss(values, returns)
 
-                # loss = actor_loss + critic_loss
-                loss = actor_loss
+                loss = actor_loss + critic_loss
+                # loss = actor_loss
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -226,7 +226,7 @@ class RolloutBuffer():
 
     def compute_advantages(self, gamma):
         T = len(self.rewards)
-        Q = np.zeros(T, np.float32)
+        self.returns = np.zeros(T, np.float32)
 
         cumsum = 0
         for t in reversed(range(T)):
@@ -234,12 +234,10 @@ class RolloutBuffer():
                 cumsum = self.rewards[t]
             else:
                 cumsum = self.rewards[t] + gamma*cumsum
-            Q[t] = cumsum
+            self.returns[t] = cumsum
         
-        self.returns = Q[::-1]
         self.returns = (self.returns-np.mean(self.returns))/(np.std(self.returns)+1e-6)
         self.advantages = self.returns - self.values
-        # return torch.from_numpy(Q).to(device, torch.float32)
 
 
 def main():
@@ -249,9 +247,9 @@ def main():
     parser.add_argument('--gamma', default=0.99, type=float)
     parser.add_argument('--lr', default=0.001, type=float)
     parser.add_argument('--n_timesteps', default=1000000, type=int)
-    parser.add_argument('--n_epochs', default=1, type=int)
+    parser.add_argument('--n_epochs', default=5, type=int)
     parser.add_argument('--batch_size', default=512, type=int)
-    parser.add_argument('--buffer_size', default=512, type=int)
+    parser.add_argument('--buffer_size', default=2048, type=int)
     args = parser.parse_args()
 
     if args.procgen:
