@@ -3,9 +3,11 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.distributions as distributions
 import torch.nn.functional as F
+from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 import gym
 import argparse
+import time
 
 
 device = 'cuda'
@@ -24,7 +26,8 @@ class PPO():
         buffer_size,
         clip_coef,
         critic_coef,
-        entropy_coef
+        entropy_coef,
+        tensorboard
     ):
         self.env = env
         self.eval_env = eval_env
@@ -37,13 +40,19 @@ class PPO():
         self.clip_coef = clip_coef
         self.critic_coef = critic_coef
         self.entropy_coef = entropy_coef
+        self.tensorboard = tensorboard
 
         self.ob_dim = env.observation_space.shape
         self.ac_dim = env.action_space.n
         self.policy = ActorCriticPolicy()
         self.rollout_buffer = RolloutBuffer(buffer_size, self.ob_dim)
 
+        if self.tensorboard:
+            datetime = time.strftime('%m-%d-%y_%H-%M-%S')
+            self.writer = SummaryWriter(log_dir='logs/{}'.format(datetime))
+
         self._obs = env.reset()
+        self._it = 0
 
     def train(self):
         optimizer = optim.Adam(self.policy.parameters(), lr=self.lr)
@@ -64,6 +73,12 @@ class PPO():
 
                 loss = actor_loss + critic_loss + entropy_loss
 
+                if self.tensorboard:
+                    self.writer.add_scalar('Actor Loss', actor_loss.item(), self._it)
+                    self.writer.add_scalar('Critic Loss', critic_loss.item(), self._it)
+                    self.writer.add_scalar('Entropy Loss', entropy_loss.item(), self._it)
+                    self._it += 1
+
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
@@ -74,8 +89,10 @@ class PPO():
             self.train()
 
             print('Iteration {}: avg reward={}'.format(i, avg_reward))
+            if self.tensorboard:
+                self.writer.add_scalar('Reward', avg_reward, i)
 
-            if i % 10 == 0:
+            if (i+1) % 100 == 0:
                 avg_reward = self.evaluate_policy(self.eval_env, self.policy)
                 print(avg_reward)
 
@@ -85,7 +102,7 @@ class PPO():
             obs = env.reset()
             total_reward = 0
             while True:
-                env.render()
+                env.render(mode='human')
                 action, _ = policy.get_actions_np(obs)
                 obs, reward, done, info = env.step(action)
                 total_reward += reward
@@ -113,6 +130,8 @@ class PPO():
 class ActorCriticPolicy(nn.Module):
     def __init__(self):
         super(ActorCriticPolicy, self).__init__()
+        self.features = nn.Sequential(
+        )
         self.actor = nn.Sequential(
             nn.Linear(4, 32),
             nn.Tanh(),
@@ -129,44 +148,62 @@ class ActorCriticPolicy(nn.Module):
         )
         self.actor = self.actor.to(device)
         self.critic = self.critic.to(device)
+        # self.features = nn.Sequential(
+        #     nn.Conv2d(in_channels=3, out_channels=32, kernel_size=8, stride=4, padding=2),
+        #     nn.ReLU(),
+        #     nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, stride=2, padding=1),
+        #     nn.ReLU(),
+        #     nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=2, padding=1),
+        #     nn.ReLU(),
+        #     nn.Flatten()
+        # )
+        # self.actor = nn.Sequential(
+        #     nn.Linear(1024, 512),
+        #     nn.ReLU(),
+        #     nn.Linear(512, 15)
+        # )
+        # self.critic = nn.Sequential(
+        #     nn.Linear(1024, 512),
+        #     nn.ReLU(),
+        #     nn.Linear(512, 1)
+        # )
+        self.features = self.features.to(device)
+        self.actor = self.actor.to(device)
+        self.critic = self.critic.to(device)
 
     def forward(self, obs):
-        logits = self.actor(obs)
+        logits = self.actor(self.features(obs))
         return distributions.Categorical(logits=logits)
 
-    def get_actions(self, obs):
+    def process_obs(self, obs):
         if isinstance(obs, np.ndarray):
             obs = torch.from_numpy(obs).to(device, torch.float32)
-            dis = self.forward(obs)
-            action = dis.sample()
-            return action, dis.log_prob(action)
-        else:
-            dis = self.forward(obs)
-            action = dis.sample()
-            return action, dis.log_prob(action)
+        if len(obs.shape) == 3:
+            obs = obs.unsqueeze(dim=0)
+        if len(obs.shape) == 4:
+            obs = obs.permute(0, 3, 1, 2)/255
+        # Norm?
+        return obs
+
+    def get_actions(self, obs):
+        obs = self.process_obs(obs)
+        dis = self.forward(obs)
+        action = dis.sample()
+        return action.squeeze(), dis.log_prob(action)
 
     def get_actions_np(self, obs):
         action, logprob = self.get_actions(obs)
         return action.cpu().numpy(), logprob.detach().cpu().numpy()
 
     def evaluate_actions(self, obs, actions):
-        if isinstance(obs, np.ndarray):
-            obs = torch.from_numpy(obs).to(device, torch.float32)
-            dis = self.forward(obs)
-            return dis.log_prob(actions), dis.entropy()
-        else:
-            dis = self.forward(obs)
-            return dis.log_prob(actions), dis.entropy()
-
+        obs = self.process_obs(obs)
+        dis = self.forward(obs)
+        return dis.log_prob(actions), dis.entropy()
 
     def get_values(self, obs):
-        if isinstance(obs, np.ndarray):
-            obs = torch.from_numpy(obs).to(device, torch.float32)
-            values = self.critic(obs)
-            return values.squeeze()
-        else:
-            values = self.critic(obs)
-            return values.squeeze()
+        obs = self.process_obs(obs)
+        values = self.critic(self.features(obs))
+        return values.squeeze()
 
 
 class RolloutBuffer():
@@ -216,8 +253,12 @@ class RolloutBuffer():
             yield tuple(map(lambda A: torch.from_numpy(A).to(device), b))
 
     def get_average_reward(self):
-        i = np.where(self.dones == 1)[0][-1]
-        return np.sum(self.rewards[:i])/np.sum(self.dones)
+        i = np.where(self.dones == 1)[0]
+        if len(i) == 0:
+            return np.sum(self.rewards)
+        else:
+            end = i[-1]
+            return np.sum(self.rewards[:end])/np.sum(self.dones)
 
     def compute_advantages(self, gamma):
         T = len(self.rewards)
@@ -235,28 +276,44 @@ class RolloutBuffer():
         self.advantages = self.returns - self.values
 
 
+class ImageWrapper(gym.ObservationWrapper):
+    def __init__(self, env):
+        super().__init__(env)
+
+    def observation(self, obs):
+        return np.transpose(obs, (2, 0, 1))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--env_name', default='CartPole-v0', type=str)
     parser.add_argument('--procgen', action='store_true')
-    parser.add_argument('--gamma', default=0.99, type=float)
-    parser.add_argument('--lr', default=0.0003, type=float)
+    parser.add_argument('--gamma', default=0.995, type=float)
+    parser.add_argument('--lr', default=0.0005, type=float)
     parser.add_argument('--n_timesteps', default=1000000, type=int)
     parser.add_argument('--n_epochs', default=8, type=int)
-    parser.add_argument('--batch_size', default=512, type=int)
-    parser.add_argument('--buffer_size', default=2048, type=int)
+    parser.add_argument('--batch_size', default=128, type=int)
+    parser.add_argument('--buffer_size', default=512, type=int)
     parser.add_argument('--clip_coef', default=0.2, type=float)
     parser.add_argument('--critic_coef', default=0.5, type=float)
     parser.add_argument('--entropy_coef', default=0.00, type=float)
+    parser.add_argument('--tensorboard', action='store_true')
     args = parser.parse_args()
 
     if args.procgen:
         args.env_name = 'procgen:procgen-{}'.format(args.env_name)
         env = gym.make(args.env_name, distribution_mode='easy')
-        eval_env = gym.make(args.env_name, distribution_mode='easy')
+        eval_env = gym.make(args.env_name, distribution_mode='easy', render=True)
     else:
         env = gym.make(args.env_name)
         eval_env = gym.make(args.env_name)
+
+    # if len(env.observation_space.shape) > 1:
+    #     env = ImageWrapper(env)
+
+    print('Environment:', args.env_name)
+    print('Observation Space:', env.observation_space)
+    print('Action Space:', env.action_space)
 
     ppo = PPO(
         env=env,
@@ -269,7 +326,8 @@ def main():
         buffer_size=args.buffer_size,
         clip_coef=args.clip_coef,
         critic_coef=args.critic_coef,
-        entropy_coef=args.entropy_coef
+        entropy_coef=args.entropy_coef,
+        tensorboard=args.tensorboard
     )
     ppo.learn()
 
