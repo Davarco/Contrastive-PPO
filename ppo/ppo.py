@@ -29,6 +29,8 @@ class PPO():
         clip_coef,
         critic_coef,
         entropy_coef,
+        load_model_path,
+        save_freq,
         eval_freq,
         num_eval_episodes,
         num_eval_renders,
@@ -47,6 +49,8 @@ class PPO():
         self.clip_coef = clip_coef
         self.critic_coef = critic_coef
         self.entropy_coef = entropy_coef
+        self.load_model_path = load_model_path
+        self.save_freq = save_freq
         self.eval_freq = eval_freq
         self.num_eval_episodes = num_eval_episodes
         self.num_eval_renders = num_eval_renders
@@ -57,12 +61,16 @@ class PPO():
         self.policy = ActorCriticPolicy()
         self.rollout_buffer = RolloutBuffer(n_steps, n_envs, self.ob_dim)
 
+        if self.load_model_path:
+            self.policy = torch.load(self.load_model_path)
+
         if self.tensorboard:
-            datetime = time.strftime('%m-%d-%y_%H-%M-%S')
-            self.writer = SummaryWriter(log_dir='logs/{}'.format(datetime))
+            self.datetime = time.strftime('%m-%d-%y_%H-%M-%S')
+            self.writer = SummaryWriter(log_dir='logs/{}'.format(self.datetime))
 
         self._obs = env.reset()
         self._next_eval = self.eval_freq
+        self._next_save = self.save_freq
         self._steps = 0
 
     def train(self):
@@ -137,6 +145,10 @@ class PPO():
                 print('Evaluating policy...')
                 print('Mean Reward={}'.format(mr))
                 print('Mean Length={}'.format(ml))
+
+            if self.tensorboard and self._steps >= self._next_save:
+                torch.save(self.policy, 'models/{}-{}.pt'.format(self.datetime, self._steps))
+                self._next_save += self.save_freq
 
     def evaluate_policy(self):
         rewards = []

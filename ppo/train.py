@@ -51,6 +51,8 @@ def main(args):
         clip_coef=args.clip_coef,
         critic_coef=args.critic_coef,
         entropy_coef=args.entropy_coef,
+        load_model_path=args.load_model_path,
+        save_freq=args.save_freq,
         eval_freq=args.eval_freq,
         num_eval_episodes=args.num_eval_episodes,
         num_eval_renders=args.num_eval_renders,
@@ -73,11 +75,12 @@ if __name__ == '__main__':
     parser.add_argument('--clip_coef', default=0.2, type=float)
     parser.add_argument('--critic_coef', default=0.5, type=float)
     parser.add_argument('--entropy_coef', default=0.01, type=float)
-    parser.add_argument('--tensorboard', action='store_true')
-    parser.add_argument('--eval_freq', default=500000, type=int)
+    parser.add_argument('--load_model_path', default=None, type=str)
     parser.add_argument('--save_freq', default=500000, type=int)
+    parser.add_argument('--eval_freq', default=500000, type=int)
     parser.add_argument('--num_eval_episodes', default=10, type=int)
     parser.add_argument('--num_eval_renders', default=1, type=int)
+    parser.add_argument('--tensorboard', action='store_true')
     args = parser.parse_args()
 
     main(args)
