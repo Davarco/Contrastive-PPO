@@ -51,6 +51,10 @@ def main(args):
         clip_coef=args.clip_coef,
         critic_coef=args.critic_coef,
         entropy_coef=args.entropy_coef,
+        curl_batch_size=args.curl_batch_size,
+        curl_steps=args.curl_steps,
+        curl_epochs=args.curl_epochs,
+        curl_lr=args.curl_lr,
         load_model_path=args.load_model_path,
         save_freq=args.save_freq,
         eval_freq=args.eval_freq,
@@ -75,6 +79,10 @@ if __name__ == '__main__':
     parser.add_argument('--clip_coef', default=0.2, type=float)
     parser.add_argument('--critic_coef', default=0.5, type=float)
     parser.add_argument('--entropy_coef', default=0.01, type=float)
+    parser.add_argument('--curl_batch_size', default=256, type=int)
+    parser.add_argument('--curl_steps', default=256, type=int)
+    parser.add_argument('--curl_epochs', default=3, type=int)
+    parser.add_argument('--curl_lr', default=0.0003, type=float)
     parser.add_argument('--load_model_path', default=None, type=str)
     parser.add_argument('--save_freq', default=500000, type=int)
     parser.add_argument('--eval_freq', default=500000, type=int)

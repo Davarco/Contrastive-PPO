@@ -41,13 +41,35 @@ class RolloutBuffer():
                 self.actions.reshape(buffer_size)[k], 
                 self.logprobs.reshape(buffer_size)[k], 
                 self.values[:-1].reshape(buffer_size)[k], 
-                self.rewards.reshape(buffer_size)[k], 
-                self.dones.reshape(buffer_size)[k],
+                # self.rewards.reshape(buffer_size)[k], 
+                # self.dones.reshape(buffer_size)[k],
                 self.returns.reshape(buffer_size)[k],
                 self.advantages.reshape(buffer_size)[k]
             )
             j += batch_size
             yield tuple(map(lambda A: torch.from_numpy(A).to(device), b))
+
+    def get_curl_dataloader(self, batch_size):
+        buffer_size = self.n_envs*self.n_steps
+        i = np.random.choice(np.arange(buffer_size), buffer_size, replace=False)
+        anchors = self.obs.reshape((buffer_size, *self.ob_dim))[i]
+
+        j = 0
+        while j < buffer_size:
+            k = i[j:j+batch_size]
+            # positives = np.zeros((batch_size, *self.ob_dim), dtype=np.float32)
+            # for r in range(4):
+            #     s = np.index_exp[r*(batch_size//4):(r+1)*(batch_size//4)]
+            #     positives[s] = np.rot90(anchors[k][s], r, axes=(2, 3)) 
+            # positives = random_crop(anchors[k], 48)
+            
+            # b = (
+            #     anchors[k]
+            #     # positives
+            # )
+            j += batch_size
+            # yield tuple(map(lambda A: torch.from_numpy(A).to(device), b))
+            yield torch.from_numpy(anchors[k]).to(device)
 
     def compute_advantages(self, gamma, gae_lambda):
         self.returns = np.zeros((self.n_steps, self.n_envs), np.float32)
@@ -63,6 +85,7 @@ class RolloutBuffer():
         self.advantages = (self.advantages-np.mean(self.advantages))/(np.std(self.advantages)+1e-6)
 
     def compute_statistics(self):
+        # Ignore unfinished episodes at the end of n_steps
         episode_rewards = []
         episode_lengths = []
         for e in range(self.n_envs):
