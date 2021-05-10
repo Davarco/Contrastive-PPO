@@ -1,3 +1,4 @@
+import torchvision.transforms as transforms
 import torch
 import numpy as np
 
@@ -49,27 +50,39 @@ class RolloutBuffer():
             j += batch_size
             yield tuple(map(lambda A: torch.from_numpy(A).to(device), b))
 
-    def get_curl_dataloader(self, batch_size):
+    def get_curl_dataloader(self, batch_size, rotate, crop, color):
         buffer_size = self.n_envs*self.n_steps
         i = np.random.choice(np.arange(buffer_size), buffer_size, replace=False)
-        anchors = self.obs.reshape((buffer_size, *self.ob_dim))[i]
+
+        random_crop = transforms.RandomResizedCrop((64, 64), (0.5, 1.0))
+        color_distort = transforms.Compose([
+            transforms.RandomApply([transforms.ColorJitter(0.8, 0.8, 0.8, 0.2)], p=0.8),
+            transforms.RandomGrayscale(p=0.2)
+        ])
 
         j = 0
         while j < buffer_size:
             k = i[j:j+batch_size]
-            # positives = np.zeros((batch_size, *self.ob_dim), dtype=np.float32)
-            # for r in range(4):
-            #     s = np.index_exp[r*(batch_size//4):(r+1)*(batch_size//4)]
-            #     positives[s] = np.rot90(anchors[k][s], r, axes=(2, 3)) 
-            # positives = random_crop(anchors[k], 48)
-            
-            # b = (
-            #     anchors[k]
-            #     # positives
-            # )
             j += batch_size
-            # yield tuple(map(lambda A: torch.from_numpy(A).to(device), b))
-            yield torch.from_numpy(anchors[k]).to(device)
+            anc = self.obs.reshape((buffer_size, *self.ob_dim))[i][k]
+            pos = np.zeros((batch_size, *self.ob_dim), dtype=np.float32)
+
+            if rotate:
+                for r in range(4):
+                    s = np.index_exp[r*(batch_size//4):(r+1)*(batch_size//4)]
+                    pos[s] = np.rot90(anc[s], r, axes=(2, 3)) 
+
+            anc, pos = tuple(map(lambda A: torch.from_numpy(A).to(device), (anc, pos))) 
+            
+            if crop:
+                anc = random_crop(anc)
+                pos = random_crop(anc)
+
+            if color:
+                anc = color_distort(anc)
+                pos = color_distort(anc)
+
+            yield anc, pos
 
     def compute_advantages(self, gamma, gae_lambda):
         self.returns = np.zeros((self.n_steps, self.n_envs), np.float32)

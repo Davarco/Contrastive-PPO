@@ -35,12 +35,16 @@ class PPO():
         curl_steps,
         curl_epochs,
         curl_lr,
-        load_model_path,
+        curl_rotate,
+        curl_crop,
+        curl_distort,
+        model_path,
         save_freq,
         eval_freq,
         num_eval_episodes,
         num_eval_renders,
-        tensorboard
+        tensorboard,
+        run_name
     ):
         self.env = env
         self.n_envs = n_envs
@@ -59,27 +63,34 @@ class PPO():
         self.curl_steps = curl_steps
         self.curl_epochs = curl_epochs
         self.curl_lr = curl_lr
-        self.load_model_path = load_model_path
+        self.curl_rotate = curl_rotate
+        self.curl_crop = curl_crop
+        self.curl_distort = curl_distort
+        self.model_path = model_path
         self.save_freq = save_freq
         self.eval_freq = eval_freq
         self.num_eval_episodes = num_eval_episodes
         self.num_eval_renders = num_eval_renders
         self.tensorboard = tensorboard
+        self.run_name = run_name
+        
+        if not run_name:
+            self.run_name = time.strftime('%m-%d-%y_%H-%M-%S')
         
         self.ob_dim = env.observation_space.shape
         self.ac_dim = env.action_space.n
         self.policy = ActorCriticPolicy()
         self.rollout_buffer = RolloutBuffer(n_steps, n_envs, self.ob_dim)
+        self.curl_rollout_buffer = RolloutBuffer(self.curl_steps, n_envs, self.ob_dim)
 
-        if self.load_model_path:
-            self.policy = torch.load(self.load_model_path)
+        if self.model_path:
+            self.policy = torch.load(self.model_path)
 
         # self.key_encoder = ImageEncoder().to(device)
         self.W = nn.Parameter(torch.randn(256, 256, requires_grad=True, device=device))
 
         if self.tensorboard:
-            self.datetime = time.strftime('%m-%d-%y_%H-%M-%S')
-            self.writer = SummaryWriter(log_dir='logs/{}'.format(self.datetime))
+            self.writer = SummaryWriter(log_dir='logs/{}'.format(self.run_name))
 
         self._obs = env.reset()
         self._next_eval = self.eval_freq
@@ -130,18 +141,18 @@ class PPO():
     def train_curl(self):
         self.policy.train()
 
-        curl_losses = []
-        curl_scores = []
+        i = 0
+        for e in range(self.curl_epochs):
+            curl_losses = []
+            curl_scores = []
 
-        random_crop = transforms.RandomResizedCrop((64, 64), (0.5, 1.0))
-        color_distort = transforms.Compose(
-            transforms.RandomApply([transforms.ColorJitter(0.8, 0.8, 0.8, 0.2)], p=0.8),
-            transforms.RandomGrayscale(p=0.2)
-        )
-
-        for _ in range(self.curl_epochs):
-            for batch in self.rollout_buffer.get_curl_dataloader(self.curl_batch_size):
-                anc, pos = color_distort(random_crop(batch)), color_distort(random_crop(batch))
+            for batch in self.curl_rollout_buffer.get_curl_dataloader(
+                batch_size=self.curl_batch_size, 
+                rotate=self.curl_rotate, 
+                crop=self.curl_crop, 
+                color=self.curl_distort
+            ):
+                anc, pos = batch
                 anc_enc = self.policy.encoder(anc)
                 pos_enc = self.policy.encoder(pos)
                 logits = torch.matmul(anc_enc, torch.matmul(self.W, torch.transpose(pos_enc, 0, 1)))
@@ -158,36 +169,36 @@ class PPO():
                 curl_losses.append(curl_loss.item())
                 curl_scores.append(curl_score.item())
 
-        return np.mean(curl_losses), np.mean(curl_scores)
+                if self.tensorboard:
+                    self.writer.add_scalar('Contrastive Loss', curl_loss.item(), i)
+                    self.writer.add_scalar('Contrastive Score', curl_score.item(), i)
+                    i += 1
 
-    def learn(self):
-        while self._steps < self.curl_steps:
-            self.collect_rollouts()
+            curl_loss = np.mean(curl_losses)
+            curl_score = np.mean(curl_scores)
 
-            curl_loss, curl_score = self.train_curl()
-
-            self._steps += self.n_steps*self.n_envs
             log = {
                 'Contrastive Loss': curl_loss,
                 'Contrastive Score': curl_score
             }
             t = PrettyTable()
             t.header = False
-            t.add_row(['Timesteps', self._steps])
-            for key, val in log.items():
-                t.add_row([key, val])
+            t.add_row(['Epochs', e])
+            t.add_row(['Contrastive Loss', curl_loss])
+            t.add_row(['Contrastive Score', curl_score])
             t.align = 'r'
             t.float_format = '.6'
             print(t)
 
-            if self.tensorboard:
-                for key, val in log.items():
-                    self.writer.add_scalar(key, val, self._steps)
-
-        self._steps = 0
+    def learn(self):
+        if self.curl_steps > 0:
+            self.collect_rollouts(self.curl_rollout_buffer, self.curl_steps)
+            print('Finished collecting pretraining rollouts.')
+            self.train_curl()
+            self._steps += self.curl_steps*self.n_envs
 
         while self._steps < self.n_timesteps:
-            self.collect_rollouts()
+            self.collect_rollouts(self.rollout_buffer, self.n_steps)
 
             actor_loss, critic_loss, entropy_loss = self.train()
 
@@ -220,7 +231,7 @@ class PPO():
                 print('Mean Length={}'.format(ml))
 
             if self.tensorboard and self._steps >= self._next_save:
-                torch.save(self.policy, 'models/{}-{}.pt'.format(self.datetime, self._steps))
+                torch.save(self.policy, 'models/checkpoints/{}-{}.pt'.format(self.run_name, self._steps))
                 self._next_save += self.save_freq
 
     def evaluate_policy(self):
@@ -246,10 +257,10 @@ class PPO():
 
         return np.mean(rewards), np.mean(lengths)
             
-    def collect_rollouts(self):
+    def collect_rollouts(self, rollout_buffer, steps):
         self.policy.eval()
-        self.rollout_buffer.reset()
-        for _ in range(self.n_steps):
+        rollout_buffer.reset()
+        for _ in range(steps):
             with torch.no_grad():
                 actions, logprobs = self.policy.get_actions(self._obs)
                 values = self.policy.get_values(self._obs)
@@ -259,7 +270,7 @@ class PPO():
 
                 next_obs, rewards, dones, _ = self.env.step(actions)
 
-            self.rollout_buffer.add_transition(
+            rollout_buffer.add_transition(
                 obs=self._obs, 
                 actions=actions, 
                 logprobs=logprobs, 
@@ -273,9 +284,9 @@ class PPO():
         with torch.no_grad():
             values = self.policy.get_values(self._obs)
             values = values.cpu().numpy()
-            self.rollout_buffer.values[-1] = values
+            rollout_buffer.values[-1] = values
 
-        self.rollout_buffer.compute_advantages(self.gamma, self.gae_lambda)
-        self.rollout_buffer.compute_statistics()
+        rollout_buffer.compute_advantages(self.gamma, self.gae_lambda)
+        rollout_buffer.compute_statistics()
 
 

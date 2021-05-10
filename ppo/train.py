@@ -19,7 +19,7 @@ def main(args):
         num_envs=args.n_envs, 
         env_name=args.env_name, 
         start_level=500, 
-        num_levels=50, 
+        num_levels=args.n_levels, 
         distribution_mode='easy'
     )
     eval_env = ProcgenEnv(
@@ -55,18 +55,24 @@ def main(args):
         curl_steps=args.curl_steps,
         curl_epochs=args.curl_epochs,
         curl_lr=args.curl_lr,
-        load_model_path=args.load_model_path,
+        curl_rotate=args.curl_rotate,
+        curl_crop=args.curl_crop,
+        curl_distort=args.curl_distort,
+        model_path=args.model_path,
         save_freq=args.save_freq,
         eval_freq=args.eval_freq,
         num_eval_episodes=args.num_eval_episodes,
         num_eval_renders=args.num_eval_renders,
-        tensorboard=args.tensorboard
+        tensorboard=args.tensorboard,
+        run_name=args.run_name
     )
     ppo.learn()
+    torch.save(ppo.policy, 'models/{}.pt'.format(ppo.run_name))
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument('--n_levels', default=50, type=int)
     parser.add_argument('--env_name', default='fruitbot', type=str)
     parser.add_argument('--n_envs', default=64, type=int)
     parser.add_argument('--gamma', default=0.999, type=float)
@@ -79,16 +85,20 @@ if __name__ == '__main__':
     parser.add_argument('--clip_coef', default=0.2, type=float)
     parser.add_argument('--critic_coef', default=0.5, type=float)
     parser.add_argument('--entropy_coef', default=0.01, type=float)
-    parser.add_argument('--curl_batch_size', default=256, type=int)
-    parser.add_argument('--curl_steps', default=256, type=int)
-    parser.add_argument('--curl_epochs', default=3, type=int)
+    parser.add_argument('--curl_batch_size', default=512, type=int)
+    parser.add_argument('--curl_steps', default=1024, type=int)
+    parser.add_argument('--curl_epochs', default=10, type=int)
     parser.add_argument('--curl_lr', default=0.0003, type=float)
-    parser.add_argument('--load_model_path', default=None, type=str)
+    parser.add_argument('--curl_rotate', action='store_true')
+    parser.add_argument('--curl_crop', action='store_true')
+    parser.add_argument('--curl_distort', action='store_true')
+    parser.add_argument('--model_path', default=None, type=str)
     parser.add_argument('--save_freq', default=500000, type=int)
     parser.add_argument('--eval_freq', default=500000, type=int)
     parser.add_argument('--num_eval_episodes', default=10, type=int)
     parser.add_argument('--num_eval_renders', default=1, type=int)
     parser.add_argument('--tensorboard', action='store_true')
+    parser.add_argument('--run_name', default=None, type=str)
     args = parser.parse_args()
 
     main(args)

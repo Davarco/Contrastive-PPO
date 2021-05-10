@@ -1,4 +1,5 @@
 from torch.utils.tensorboard import SummaryWriter
+from prettytable import PrettyTable
 from procgen import ProcgenEnv
 from wrappers import ProcgenWrapper
 from ac_policy import ActorCriticPolicy
@@ -68,7 +69,7 @@ def main(args):
     print('Observation Space:', env.observation_space)
     print('Action Space:', env.action_space)
 
-    policy = torch.load(args.load_model_path)
+    policy = torch.load(args.model_path)
     results = evaluate_policy(env, policy, args.n_envs, args.n_steps)
     
     t = PrettyTable()
@@ -85,7 +86,7 @@ if __name__ == '__main__':
     parser.add_argument('--env_name', default='fruitbot', type=str)
     parser.add_argument('--n_envs', default=64, type=int)
     parser.add_argument('--n_steps', default=5000, type=int)
-    parser.add_argument('--load_model_path', default=None, type=str)
+    parser.add_argument('--model_path', default=None, type=str)
     args = parser.parse_args()
 
     main(args)
