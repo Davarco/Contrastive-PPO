@@ -55,6 +55,7 @@ def main(args):
         curl_steps=args.curl_steps,
         curl_epochs=args.curl_epochs,
         curl_lr=args.curl_lr,
+        curl_lr_lin_sch=args.curl_lr_lin_sch,
         curl_rotate=args.curl_rotate,
         curl_crop=args.curl_crop,
         curl_distort=args.curl_distort,
@@ -89,6 +90,7 @@ if __name__ == '__main__':
     parser.add_argument('--curl_steps', default=1024, type=int)
     parser.add_argument('--curl_epochs', default=10, type=int)
     parser.add_argument('--curl_lr', default=0.0003, type=float)
+    parser.add_argument('--curl_lr_lin_sch', action='store_true')
     parser.add_argument('--curl_rotate', action='store_true')
     parser.add_argument('--curl_crop', action='store_true')
     parser.add_argument('--curl_distort', action='store_true')

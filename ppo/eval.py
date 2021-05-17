@@ -46,11 +46,11 @@ def evaluate_policy(env, policy, n_envs, n_steps):
 
     results = {
         'min_episode_reward': np.min(episode_rewards),
-        'self.max_episode_reward': np.max(episode_rewards),
-        'self.mean_episode_reward': np.mean(episode_rewards),
-        'self.min_episode_length': np.min(episode_lengths),
-        'self.max_episode_length': np.max(episode_lengths),
-        'self.mean_episode_length': np.mean(episode_lengths)
+        'max_episode_reward': np.max(episode_rewards),
+        'mean_episode_reward': np.mean(episode_rewards),
+        'min_episode_length': np.min(episode_lengths),
+        'max_episode_length': np.max(episode_lengths),
+        'mean_episode_length': np.mean(episode_lengths)
     }
     return results
 

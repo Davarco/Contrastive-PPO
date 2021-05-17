@@ -35,6 +35,7 @@ class PPO():
         curl_steps,
         curl_epochs,
         curl_lr,
+        curl_lr_lin_sch,
         curl_rotate,
         curl_crop,
         curl_distort,
@@ -63,6 +64,7 @@ class PPO():
         self.curl_steps = curl_steps
         self.curl_epochs = curl_epochs
         self.curl_lr = curl_lr
+        self.curl_lr_lin_sch = curl_lr_lin_sch
         self.curl_rotate = curl_rotate
         self.curl_crop = curl_crop
         self.curl_distort = curl_distort
@@ -143,6 +145,10 @@ class PPO():
 
         i = 0
         for e in range(self.curl_epochs):
+            if self.curl_lr_lin_sch:
+                for g in self.curl_optimizer.param_groups:
+                    g['lr'] = (1 - e/self.curl_epochs)*self.curl_lr
+
             curl_losses = []
             curl_scores = []
 
@@ -152,6 +158,9 @@ class PPO():
                 crop=self.curl_crop, 
                 color=self.curl_distort
             ):
+                # Pseudocode from the paper below
+                # CURL: Contrastive Unsupervised Representations for Reinforcement Learning
+                # https://arxiv.org/pdf/2004.04136.pdf
                 anc, pos = batch
                 anc_enc = self.policy.encoder(anc)
                 pos_enc = self.policy.encoder(pos)
@@ -169,26 +178,30 @@ class PPO():
                 curl_losses.append(curl_loss.item())
                 curl_scores.append(curl_score.item())
 
-                if self.tensorboard:
-                    self.writer.add_scalar('Contrastive Loss', curl_loss.item(), i)
-                    self.writer.add_scalar('Contrastive Score', curl_score.item(), i)
-                    i += 1
+                i += 1
+                if i % 50 == 0:
+                    curl_loss = np.mean(curl_losses)
+                    curl_score = np.mean(curl_scores)
+                    curl_losses = []
+                    curl_scores = []
 
-            curl_loss = np.mean(curl_losses)
-            curl_score = np.mean(curl_scores)
+                    if self.tensorboard:
+                        self.writer.add_scalar('Contrastive Loss', curl_loss.item(), i)
+                        self.writer.add_scalar('Contrastive Score', curl_score.item(), i)
 
-            log = {
-                'Contrastive Loss': curl_loss,
-                'Contrastive Score': curl_score
-            }
-            t = PrettyTable()
-            t.header = False
-            t.add_row(['Epochs', e])
-            t.add_row(['Contrastive Loss', curl_loss])
-            t.add_row(['Contrastive Score', curl_score])
-            t.align = 'r'
-            t.float_format = '.6'
-            print(t)
+                    log = {
+                        'Contrastive Loss': curl_loss,
+                        'Contrastive Score': curl_score
+                    }
+                    t = PrettyTable()
+                    t.header = False
+                    t.add_row(['Iteration', i])
+                    t.add_row(['Epoch', e])
+                    t.add_row(['Contrastive Loss', curl_loss])
+                    t.add_row(['Contrastive Score', curl_score])
+                    t.align = 'r'
+                    t.float_format = '.6'
+                    print(t)
 
     def learn(self):
         if self.curl_steps > 0:

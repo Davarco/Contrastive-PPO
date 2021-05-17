@@ -54,33 +54,36 @@ class RolloutBuffer():
         buffer_size = self.n_envs*self.n_steps
         i = np.random.choice(np.arange(buffer_size), buffer_size, replace=False)
 
+        # Data augmentations from the paper below
+        # A Simple Framework for Contrastive Learning of Visual Representations
+        # https://arxiv.org/pdf/2002.05709.pdf
         random_crop = transforms.RandomResizedCrop((64, 64), (0.5, 1.0))
         color_distort = transforms.Compose([
             transforms.RandomApply([transforms.ColorJitter(0.8, 0.8, 0.8, 0.2)], p=0.8),
-            transforms.RandomGrayscale(p=0.2)
+            transforms.RandomGrayscale(p=0.8)
         ])
 
         j = 0
         while j < buffer_size:
             k = i[j:j+batch_size]
             j += batch_size
-            anc = self.obs.reshape((buffer_size, *self.ob_dim))[i][k]
-            pos = np.zeros((batch_size, *self.ob_dim), dtype=np.float32)
+            anc = self.obs.reshape((buffer_size, *self.ob_dim))[k]
+            pos = np.array(anc)
 
             if rotate:
                 for r in range(4):
                     s = np.index_exp[r*(batch_size//4):(r+1)*(batch_size//4)]
-                    pos[s] = np.rot90(anc[s], r, axes=(2, 3)) 
+                    pos[s] = np.rot90(pos[s], r, axes=(2, 3)) 
 
             anc, pos = tuple(map(lambda A: torch.from_numpy(A).to(device), (anc, pos))) 
             
             if crop:
                 anc = random_crop(anc)
-                pos = random_crop(anc)
-
+                pos = random_crop(pos)
+                
             if color:
                 anc = color_distort(anc)
-                pos = color_distort(anc)
+                pos = color_distort(pos)
 
             yield anc, pos
 
@@ -88,6 +91,8 @@ class RolloutBuffer():
         self.returns = np.zeros((self.n_steps, self.n_envs), np.float32)
         self.advantages = np.zeros((self.n_steps, self.n_envs), np.float32)
 
+        # GAE implementation from the repo below
+        # https://github.com/joonleesky/train-procgen-pytorch
         A = 0
         for t in reversed(range(self.n_steps)):
             delta = (self.rewards[t] + gamma*self.values[t+1]*(1-self.dones[t])) - self.values[t]

@@ -1,3 +1,5 @@
+# Model implementations from the repo below
+# https://github.com/joonleesky/train-procgen-pytorch
 from torch.utils.tensorboard import SummaryWriter
 from procgen import ProcgenEnv
 from wrappers import ProcgenWrapper
