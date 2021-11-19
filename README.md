@@ -6,6 +6,7 @@ Our model is split into two parts. First, there is a game state encoder which tu
 
 #### Project Setup
 First, clone the repository. Then, create a new `conda` environment and run the following command.
+
 `pip install -r requirements.txt`
 
 #### Experiments
